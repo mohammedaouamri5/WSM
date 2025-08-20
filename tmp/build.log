@@ -1,0 +1,7 @@
+# command-line-arguments
+test/Server.go:13:2: "github.com/mohammedaouamri5/WSM" imported as wsm and not used
+test/Server.go:54:21: manager.Open undefined (type *Manager has no field or method Open)
+test/Server.go:71:21: manager.GetNames undefined (type *Manager has no field or method GetNames)
+test/Server.go:83:22: manager.Send undefined (type *Manager has no field or method Send)
+test/Server.go:91:19: undefined: context
+test/Server.go:92:28: manager.ReceiveContext undefined (type *Manager has no field or method ReceiveContext)
