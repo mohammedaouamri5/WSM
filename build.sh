@@ -13,7 +13,7 @@ function build() {
     echo "----------------------------------"
     echo "Building the project..."
 
-    if go build -o "$BINARY" ./test/Server.go > "$BUILD_LOG" 2>&1; then
+    if go build -o "$BINARY" . > "$BUILD_LOG" 2>&1; then
         echo "Build succeeded." | tee -a "$BUILD_LOG"
         echo "
 |------------------------------------------|
