@@ -17,58 +17,45 @@ var ErrSocketAlreadyExists = errors.New("socket already exists")
 
 // WSConn represents a WebSocket connection managed by the Manager.
 type WSConn struct {
-	Conn       *websocket.Conn // The underlying WebSocket connection
-	SendCh     chan []byte     // Channel for outbound messages (to WebSocket)
-	RecvCh     chan []byte     // Channel for inbound messages (from WebSocket)
-	AutoClose  bool            // If true, auto-close on read/write errors
-	CloseDelay time.Duration   // Delay before closing after error (0 = immediate)
+	Conn        *websocket.Conn       // The underlying WebSocket connection
+	SendCh      chan []byte           // Channel for outbound messages (to WebSocket)
+	RecvCh      chan []byte           // Channel for inbound messages (from WebSocket)
+	AutoClose   bool                  // If true, auto-close on read/write errors
+	CloseDelay  time.Duration         // Delay before closing after error (0 = immediate)
+	ReadingHook func([]byte)          // Optional callback on every received message
 }
 
 // Manager handles multiple WebSocket connections by URL.
-// It provides thread-safe operations for opening, sending, receiving, and closing connections.
-// Supports delayed auto-close on connection errors.
+// Provides thread-safe operations for opening, sending, receiving, and closing.
 type Manager struct {
 	mu      sync.RWMutex       // Protects access to the sockets map
 	sockets map[string]*WSConn // Map of URL → WebSocket connection
 }
 
 // NewManager creates a new WebSocket connection manager.
-//
-// Returns:
-//   - *Manager: A new instance with an empty socket map.
 func NewManager() *Manager {
 	return &Manager{
 		sockets: make(map[string]*WSConn),
 	}
 }
 
-// NewWSConn creates a new WSConn with the given connection, channel buffer size, auto-close, and close delay.
-//
-// Parameters:
-//   - conn: The *websocket.Conn to manage.
-//   - chanSize: Buffer size for SendCh and RecvCh. If <= 0, defaults to 256.
-//   - autoClose: If true, auto-close on read/write errors.
-//   - closeDelay: Time to wait before closing after error. Use 0 for immediate.
-//
-// Returns:
-//   - *WSConn: A fully initialized WSConn instance.
-func NewWSConn(conn *websocket.Conn, chanSize int, autoClose bool, closeDelay time.Duration) *WSConn {
+// NewWSConn creates a new WSConn with the given connection, channel buffer size,
+// auto-close flag, close delay, and optional reading hook.
+func NewWSConn(conn *websocket.Conn, chanSize int, autoClose bool, closeDelay time.Duration, hook func([]byte)) *WSConn {
 	if chanSize <= 0 {
 		chanSize = 256
 	}
 	return &WSConn{
-		Conn:       conn,
-		SendCh:     make(chan []byte, chanSize),
-		RecvCh:     make(chan []byte, chanSize),
-		AutoClose:  autoClose,
-		CloseDelay: closeDelay,
+		Conn:        conn,
+		SendCh:      make(chan []byte, chanSize),
+		RecvCh:      make(chan []byte, chanSize),
+		AutoClose:   autoClose,
+		CloseDelay:  closeDelay,
+		ReadingHook: hook,
 	}
 }
 
 // GetNames returns a slice of all registered socket URLs.
-//
-// Returns:
-//   - []string: List of all currently open socket URLs (arbitrary order).
 func (m *Manager) GetNames() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -80,12 +67,6 @@ func (m *Manager) GetNames() []string {
 }
 
 // Exists checks if a socket with the given URL is currently open.
-//
-// Parameters:
-//   - url: The URL key to check.
-//
-// Returns:
-//   - bool: true if the socket exists; false otherwise.
 func (m *Manager) Exists(url string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -94,39 +75,12 @@ func (m *Manager) Exists(url string) bool {
 }
 
 // Open opens a new WebSocket connection under the given URL.
-//
-// Parameters:
-//   - url: Unique identifier for the connection (e.g., /ws/user123/notification).
-//   - conn: The *websocket.Conn to manage.
-//   - autoClose: If true, auto-close on read/write errors.
-//   - closeDelay: Time to wait before closing after error. Use 0 for immediate.
-//
-// Returns:
-//   - error: nil on success, ErrSocketAlreadyExists if URL is already in use.
-//
-// The connection is managed in the background:
-//   - Outgoing messages are sent via SendCh.
-//   - Incoming messages are delivered via RecvCh.
-//   - On error, if AutoClose is true, waits CloseDelay before closing.
-//
-// This method takes ownership of the connection. Do not use conn after calling Open.
 func (m *Manager) Open(url string, conn *websocket.Conn, closeDelay time.Duration) error {
-
-	return m.OpenWithSize(url, conn, 256, closeDelay)
+	return m.OpenWithHook(url, conn, 256, closeDelay, nil)
 }
 
-// OpenWithSize is like Open, but allows specifying the buffer size for internal channels.
-//
-// Parameters:
-//   - url: The URL key for the connection.
-//   - conn: The *websocket.Conn to manage.
-//   - autoClose: If true, auto-close on errors.
-//   - chanSize: Buffer size for SendCh and RecvCh. If <= 0, defaults to 256.
-//   - closeDelay: Time to wait before closing after error.
-//
-// Returns:
-//   - error: nil on success, ErrSocketAlreadyExists if URL is already in use.
-func (m *Manager) OpenWithSize(url string, conn *websocket.Conn, chanSize int, closeDelay time.Duration) error {
+// OpenWithHook opens a connection with buffer size, close delay, and optional ReadingHook.
+func (m *Manager) OpenWithHook(url string, conn *websocket.Conn, chanSize int, closeDelay time.Duration, hook func([]byte)) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -135,7 +89,7 @@ func (m *Manager) OpenWithSize(url string, conn *websocket.Conn, chanSize int, c
 	}
 	autoClose := closeDelay <= 0
 
-	ws := NewWSConn(conn, chanSize, autoClose, closeDelay)
+	ws := NewWSConn(conn, chanSize, autoClose, closeDelay, hook)
 	m.sockets[url] = ws
 
 	// Start background goroutines
@@ -145,16 +99,7 @@ func (m *Manager) OpenWithSize(url string, conn *websocket.Conn, chanSize int, c
 	return nil
 }
 
-// startWriter runs in a goroutine and sends messages from SendCh to the WebSocket.
-//
-// Parameters:
-//   - url: The URL key (used to clean up on error).
-//   - ws: The managed WebSocket connection.
-//
-// Exits when:
-//   - SendCh is closed (after Close)
-//   - WriteMessage fails
-//   - AutoClose triggers m.Close(url) after optional delay
+// startWriter sends messages from SendCh to the WebSocket.
 func (m *Manager) startWriter(url string, ws *WSConn) {
 	defer func() {
 		m.Close(url) // Final cleanup
@@ -164,12 +109,8 @@ func (m *Manager) startWriter(url string, ws *WSConn) {
 		if err := ws.Conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 			if ws.AutoClose {
 				if ws.CloseDelay > 0 {
-					// Schedule delayed close
-					time.AfterFunc(ws.CloseDelay, func() {
-						m.Close(url)
-					})
+					time.AfterFunc(ws.CloseDelay, func() { m.Close(url) })
 				} else {
-					// Close immediately
 					m.Close(url)
 				}
 			}
@@ -178,22 +119,12 @@ func (m *Manager) startWriter(url string, ws *WSConn) {
 	}
 }
 
-// startReader runs in a goroutine and reads messages from the WebSocket into RecvCh.
-//
-// Parameters:
-//   - url: The URL key for cleanup.
-//   - ws: The managed WebSocket connection.
-//
-// Blocks if RecvCh is full (backpressure).
-// Exits when ReadMessage returns an error.
-// If AutoClose is enabled, waits CloseDelay before closing the socket.
+// startReader reads messages and pushes them into RecvCh and/or triggers the hook.
 func (m *Manager) startReader(url string, ws *WSConn) {
 	defer func() {
 		if ws.AutoClose {
 			if ws.CloseDelay > 0 {
-				time.AfterFunc(ws.CloseDelay, func() {
-					m.Close(url)
-				})
+				time.AfterFunc(ws.CloseDelay, func() { m.Close(url) })
 			} else {
 				m.Close(url)
 			}
@@ -205,21 +136,18 @@ func (m *Manager) startReader(url string, ws *WSConn) {
 		if err != nil {
 			return
 		}
-		// Blocks if channel is full — applies backpressure
+
+		// 🔥 Trigger hook if provided (non-blocking)
+		if ws.ReadingHook != nil {
+			go ws.ReadingHook(msg)
+		}
+
+		// Still deliver message into channel
 		ws.RecvCh <- msg
 	}
 }
 
 // Send sends a message to the WebSocket associated with the given URL.
-//
-// Parameters:
-//   - url: The URL of the target socket.
-//   - data: The message payload (e.g., JSON in []byte).
-//
-// Returns:
-//   - error: nil on success, ErrSocketNotFound if socket doesn't exist.
-//
-// This blocks if the send channel is full (backpressure).
 func (m *Manager) Send(url string, data []byte) error {
 	m.mu.RLock()
 	ws, ok := m.sockets[url]
@@ -229,35 +157,16 @@ func (m *Manager) Send(url string, data []byte) error {
 		return ErrSocketNotFound
 	}
 
-	// Blocks if SendCh is full — backpressure
 	ws.SendCh <- data
 	return nil
 }
 
 // Receive waits for the next message from the socket at the given URL.
-//
-// Parameters:
-//   - url: The URL of the socket to receive from.
-//
-// Returns:
-//   - []byte: The received message.
-//   - error: ErrSocketNotFound if socket doesn't exist.
-//
-// Blocks until a message is available.
-// Consider using ReceiveContext for timeouts.
 func (m *Manager) Receive(url string) ([]byte, error) {
 	return m.ReceiveContext(context.Background(), url)
 }
 
 // ReceiveContext waits for the next message with a context (timeout/cancellation).
-//
-// Parameters:
-//   - ctx: Context for timeout or cancellation.
-//   - url: The URL of the socket to receive from.
-//
-// Returns:
-//   - []byte: The received message.
-//   - error: ErrSocketNotFound if socket not found, or ctx.Err() if canceled/timed out.
 func (m *Manager) ReceiveContext(ctx context.Context, url string) ([]byte, error) {
 	m.mu.RLock()
 	ws, ok := m.sockets[url]
@@ -276,20 +185,6 @@ func (m *Manager) ReceiveContext(ctx context.Context, url string) ([]byte, error
 }
 
 // Close closes the WebSocket connection for the given URL.
-//
-// Parameters:
-//   - url: The URL of the socket to close.
-//
-// Returns:
-//   - error: nil on success, ErrSocketNotFound if socket doesn't exist.
-//
-// This method:
-//   - Sends a WebSocket close message
-//   - Closes the underlying connection
-//   - Removes the socket from the manager
-//   - Closes SendCh and RecvCh to stop goroutines
-//
-// Safe to call multiple times.
 func (m *Manager) Close(url string) error {
 	m.mu.Lock()
 	ws, ok := m.sockets[url]
@@ -304,7 +199,6 @@ func (m *Manager) Close(url string) error {
 	// Graceful close
 	_ = ws.Conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 
-	// Close connection and channels
 	_ = ws.Conn.Close()
 	close(ws.SendCh)
 	close(ws.RecvCh)
@@ -313,15 +207,10 @@ func (m *Manager) Close(url string) error {
 }
 
 // IsConnected checks whether a socket with the given URL is currently open.
-//
-// Parameters:
-//   - url: The URL to check.
-//
-// Returns:
-//   - bool: true if the socket exists and is connected; false otherwise.
 func (m *Manager) IsConnected(url string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	_, ok := m.sockets[url]
 	return ok
 }
+
