@@ -11,9 +11,9 @@ import (
 
 // Errors
 var (
-	ErrSocketNotFound     = errors.New("socket not found")
+	ErrSocketNotFound      = errors.New("socket not found")
 	ErrSocketAlreadyExists = errors.New("socket already exists")
-	ErrConnDidntOpenYet   = errors.New("connection not opened yet")
+	ErrConnDidntOpenYet    = errors.New("connection not opened yet")
 )
 
 // WSConn represents a WebSocket connection managed by the Manager.
@@ -66,6 +66,31 @@ func (m *Manager) Schedule(url string, chanSize int, closeDelay time.Duration, h
 
 	ws := NewWSConn(nil, chanSize, autoClose, closeDelay, hook)
 	m.sockets[url] = ws
+	return nil
+}
+
+// Open opens a new WebSocket connection under the given URL.
+func (m *Manager) Open(url string, conn *websocket.Conn, closeDelay time.Duration) error {
+	return m.OpenWithHook(url, conn, 256, closeDelay, nil)
+}
+
+// OpenWithHook opens a connection with buffer size, close delay, and optional ReadingHook.
+func (m *Manager) OpenWithHook(url string, conn *websocket.Conn, chanSize int, closeDelay time.Duration, hook func([]byte)) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.sockets[url]; exists {
+		return ErrSocketAlreadyExists
+	}
+	autoClose := closeDelay <= 0
+
+	ws := NewWSConn(conn, chanSize, autoClose, closeDelay, hook)
+	m.sockets[url] = ws
+
+	// Start background goroutines
+	go m.startWriter(url, ws)
+	go m.startReader(url, ws)
+
 	return nil
 }
 
@@ -230,4 +255,3 @@ func (m *Manager) GetNames() []string {
 	}
 	return names
 }
-
