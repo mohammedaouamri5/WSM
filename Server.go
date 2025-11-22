@@ -17,7 +17,7 @@ var upgrader = websocket.Upgrader{
 
 func main() {
 	r := gin.Default()
-	manager := wsm.NewManager()
+	manager := wsm.NewManager(true)
 
 	// Handle new WebSocket connections
 	r.GET("/ws/:userid/notification", func(c *gin.Context) {
