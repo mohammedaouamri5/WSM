@@ -27,9 +27,9 @@ type WSConn struct {
 
 	// Debug
 	DebugSendCh map[string]*debugPacket
-	muSendCh    sync.Mutex
+	muSendCh    sync.RWMutex
 	DebugRecvCh map[string]*debugPacket
-	muRecvCh    sync.Mutex
+	muRecvCh    sync.RWMutex
 }
 
 type debugCaller struct {
@@ -83,14 +83,6 @@ func NewWSConn(conn *websocket.Conn, chanSize int, autoClose bool, closeDelay ti
 	}
 }
 
-func (m *WSConn) getDebugSendCh() any {
-	return nil
-	// __result[name]["SendCh"] = m.sockets[name].DebugSendCh
-}
-func (m *WSConn) getDebugRecvCh() any {
-	return nil
-	// __result[name]["SendCh"] = m.sockets[name].DebugSendCh
-}
 
 func (m *Manager) ToMap() any {
 	__result := make(map[string]any, 0)
@@ -107,8 +99,8 @@ func (m *Manager) ToMap() any {
 			continue
 		}
 		__result[name] = make(map[string]any, 0)
-		__result[name].(map[string]any)["SendCh"] = m.sockets[name].getDebugSendCh()
-		__result[name].(map[string]any)["RecvCh"] = m.sockets[name].getDebugRecvCh()
+		__result[name].(map[string]any)["SendCh"] = m.sockets[name].DebugSendCh
+		__result[name].(map[string]any)["RecvCh"] = m.sockets[name].DebugRecvCh
 
 	}
 
