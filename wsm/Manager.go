@@ -60,10 +60,10 @@ type Manager struct {
 }
 
 // NewManager creates a new WebSocket connection manager.
-func NewManager( debug bool) *Manager {
+func NewManager(debug bool) *Manager {
 	return &Manager{
 		DebugMode: debug,
-		sockets: make(map[string]*WSConn),
+		sockets:   make(map[string]*WSConn),
 	}
 }
 
@@ -80,9 +80,10 @@ func NewWSConn(conn *websocket.Conn, chanSize int, autoClose bool, closeDelay ti
 		AutoClose:   autoClose,
 		CloseDelay:  closeDelay,
 		ReadingHook: hook,
+		DebugSendCh: nil,
+		DebugRecvCh: nil,
 	}
 }
-
 
 func (m *Manager) ToMap() any {
 	__result := make(map[string]any, 0)
@@ -230,6 +231,9 @@ func (m *Manager) Send(url string, data []byte) error {
 
 	if m.DebugMode {
 		ws.muSendCh.Lock()
+		if ws.DebugSendCh == nil {
+			ws.DebugSendCh = make(map[string]*debugPacket)
+		}
 		name, file, line := getCallerInfo()
 		__packet := &debugPacket{
 			bytes: data,
@@ -307,4 +311,3 @@ func (m *Manager) IsConnected(url string) bool {
 	_, ok := m.sockets[url]
 	return ok
 }
-
